@@ -1,0 +1,50 @@
+---
+title: "Report"
+author: "Luis Amigo"
+date: "1 de noviembre de 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We load the needed libraries
+
+```{r packages, echo=FALSE}
+suppressPackageStartupMessages({
+  library(tidytext)
+  library(dplyr)
+  library(knitr)
+  library(wordcloud)
+  library(tm)
+  library(slam)
+  library(ngram)
+  library(tidyverse)
+  library(stringr)
+})
+```
+
+We first get a summary of file sizes:
+
+```{r corpora, cache=TRUE}
+
+revs<-Corpus(DirSource("corpora/final/en_US"))
+dtm<-DocumentTermMatrix(revs) 
+# Word count per document
+rowSums(as.matrix(dtm))
+
+```
+
+
+```{r data, echo=FALSE, cache = TRUE}
+nlines <- 1000
+twitter_file <-  file("./corpora/final/en_US/en_US.twitter.txt","r")
+twitter_gross <- readlines(twitter_file,nlines)
+twitter_df <- data_frame(line=1:1000, text=twitter_gross)
+tidy_twitter <- twitter_df %>%
+    unnest_tokens(word, text)
+
+
+```
+
