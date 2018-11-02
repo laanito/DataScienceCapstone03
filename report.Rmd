@@ -22,29 +22,166 @@ suppressPackageStartupMessages({
   library(ngram)
   library(tidyverse)
   library(stringr)
+  library(scales)
+  library(ggplot2)
 })
 ```
 
+## File summary
+
 We first get a summary of file sizes:
 
-```{r corpora, cache=TRUE}
+```{r fileinfo, cache=TRUE, message=FALSE, warning = FALSE}
 
-revs<-Corpus(DirSource("corpora/final/en_US"))
-dtm<-DocumentTermMatrix(revs) 
-# Word count per document
-rowSums(as.matrix(dtm))
+fileInformation <- function(filepath) {
+  size <- file.info(filepath)$size/1048576
+
+  conn <- file(filepath, "r")
+  fulltext <- readLines(conn)
+  nlines <- length(fulltext)
+  
+  maxline <- 0
+  for (i in 1:nlines) {
+    linelength <- nchar(fulltext[i])
+    if (linelength > maxline) { maxline <- linelength }
+  }
+  close(conn)
+  
+  infotext <- data.frame("file"=filepath,
+                     "size"= size,
+                     "nlines" = nlines,
+                     "maxline"=maxline)
+  
+  infotext
+}
+
+data_dir <- "./corpora/"
+
+info <- fileInformation(paste0(data_dir,"final/en_US/en_US.blogs.txt"))
+info <- rbind(info, fileInformation(paste0(data_dir,"final/en_US/en_US.news.txt")))
+info <- rbind(info, fileInformation(paste0(data_dir,"final/en_US/en_US.twitter.txt")))
+
+info
+
+```
+So we have a combined size of:
+
+```{r filesize, echo=TRUE, cache = TRUE}
+
+paste0(sprintf("%.2f",sum(info$size))," MB")
 
 ```
 
+And a combined number of lines:
 
-```{r data, echo=FALSE, cache = TRUE}
-nlines <- 1000
+```{r nlines, echo=TRUE, cache = TRUE}
+
+sum(info$nlines)
+
+```
+
+## Preparing data
+
+We will extract all data of the files following this procedure but not limiting the number of lines:
+
+```{r data, cache = TRUE,warning = FALSE}
+nlines <- 10000
 twitter_file <-  file("./corpora/final/en_US/en_US.twitter.txt","r")
-twitter_gross <- readlines(twitter_file,nlines)
-twitter_df <- data_frame(line=1:1000, text=twitter_gross)
-tidy_twitter <- twitter_df %>%
-    unnest_tokens(word, text)
+twitter_gross <- readLines(twitter_file,nlines)
+twitter_df <- data_frame(line=1:nlines, text=twitter_gross)
+cleaned_text <- twitter_df %>% 
+    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
+twitter_words <- cleaned_text %>%
+    unnest_tokens(word, text) %>%
+    filter(str_detect(word, "[a-z']$"),
+           !word %in% stop_words$word)
 
+blogs_file <-  file("./corpora/final/en_US/en_US.blogs.txt","r")
+blogs_gross <- readLines(blogs_file,nlines)
+blogs_df <- data_frame(line=1:nlines, text=blogs_gross)
+cleaned_text <- blogs_df %>% 
+    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
+blogs_words <- cleaned_text %>%
+    unnest_tokens(word, text) %>%
+    filter(str_detect(word, "[a-z']$"),
+           !word %in% stop_words$word)
+
+news_file <-  file("./corpora/final/en_US/en_US.news.txt","r")
+news_gross <- readLines(news_file,nlines)
+news_df <- data_frame(line=1:nlines, text=news_gross)
+cleaned_text <- news_df %>% 
+    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
+news_words <- cleaned_text %>%
+    unnest_tokens(word, text) %>%
+    filter(str_detect(word, "[a-z']$"),
+           !word %in% stop_words$word)
+
+head(news_words)
+
+```
+
+## Analyzing data
+
+We will combine all three files on a data frame but before continuing let's analyze how different all three sources are, first of all let's see the Tf-idf to find the most relevant terms of each source
+
+
+``` {r combined, cache=TRUE, warnings = FALSE}
+
+
+combined_words <- bind_rows(mutate(twitter_words, source = "twitter"),
+                             mutate(blogs_words, source = "blogs"),
+                             mutate(news_words, source = "news"))
+
+count_words <- combined_words %>%
+   count(source, word, sort = TRUE) %>%
+   ungroup()
+
+total_words <- count_words %>% 
+  group_by(source) %>% 
+  summarize(total = sum(n))
+
+count_words <- left_join(count_words, total_words)
+
+count_words <- count_words %>%
+  bind_tf_idf(word, source, n)
+
+count_words %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>% 
+  group_by(source) %>% 
+  top_n(15) %>% 
+  ungroup %>%
+  ggplot(aes(word, tf_idf, fill = source)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~source, ncol = 3, scales = "free") +
+  coord_flip()
+
+```
+
+After that, lets see how the frequency of words compare on each source.
+
+
+```{r comparison, cache = TRUE, warnings = FALSE}
+
+word_frequency <- combined_words %>% 
+    count(source, word) %>%
+    group_by(source) %>%
+    mutate(proportion = n / sum(n)) %>% 
+    select(-n) %>% 
+    spread(source, proportion) %>% 
+    gather(source, proportion, `news`:`blogs`)
+
+ggplot(word_frequency, aes(x = proportion, y = `twitter`, color = abs(`twitter` - proportion))) +
+     geom_abline(color = "gray40", lty = 2) +
+     geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
+     geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+     scale_x_log10(labels = percent_format()) +
+     scale_y_log10(labels = percent_format()) +
+     scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", high = "gray75") +
+     facet_wrap(~source, ncol = 2) +
+     theme(legend.position="none") +
+     labs(y = "Twitter", x = NULL)
 
 ```
 
