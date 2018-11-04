@@ -9,7 +9,18 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-We load the needed libraries
+## Objectives
+
+The goal of this project is just to display that you've gotten used to working with the data and that you are on track to create your prediction algorithm. Please submit a report on R Pubs (http://rpubs.com/) that explains your exploratory analysis and your goals for the eventual app and algorithm. This document should be concise and explain only the major features of the data you have identified and briefly summarize your plans for creating the prediction algorithm and Shiny app in a way that would be understandable to a non-data scientist manager. You should make use of tables and plots to illustrate important summaries of the data set. The motivation for this project is to: 
+1. Demonstrate that you've downloaded the data and have successfully loaded it in.
+2. Create a basic report of summary statistics about the data sets.
+3. Report any interesting findings that you amassed so far.
+4. Get feedback on your plans for creating a prediction algorithm and Shiny app. 
+
+
+## first steps
+
+First we load the needed libraries, set seed and create needed functions
 
 ```{r packages, echo=FALSE}
 suppressPackageStartupMessages({
@@ -21,15 +32,51 @@ suppressPackageStartupMessages({
   library(slam)
   library(ngram)
   library(tidyverse)
+  library(tidyr)
   library(stringr)
   library(scales)
   library(ggplot2)
+  library(qdap)
+  library(igraph)
+  library(ggraph)
 })
+set.seed=28061977
+
+# function that separates capital letters hashtags
+hashgrep <- function(text) {
+  hg <- function(text) {
+    result <- ""
+    while(text != result) {
+      result <- text
+      text <- gsub("#[[:alpha:]]+\\K([[:upper:]]+)", " \\1", text, perl = TRUE)
+    }
+    return(text)
+  }
+  unname(sapply(text, hg))
+}
+
+cleanPosts <- function(text) {
+  clean_texts <- text %>%
+    gsub("<.*>", "", .) %>% # remove emojis
+    gsub("&amp;", "", .) %>% # remove &
+    gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", .) %>% # remove retweet entities
+    gsub("@\\w+", "", .) %>% # remove at people
+    hashgrep %>%
+    gsub("[[:punct:]]", "", .) %>% # remove punctuation
+    gsub("[[:digit:]]", "", .) %>% # remove digits
+    gsub("http\\w+", "", .) %>% # remove html links
+    iconv(from = "UTF-8", to = "ASCII", sub="") %>% # remove emoji and bizarre signs
+    gsub("[ \t]{2,}", " ", .) %>% # remove unnecessary spaces
+    gsub("^\\s+|\\s+$", "", .) %>% # remove unnecessary spaces
+    tolower
+  return(clean_texts)
+}
+
 ```
 
 ## File summary
 
-We first get a summary of file sizes:
+We will first get a summary of file sizes:
 
 ```{r fileinfo, cache=TRUE, message=FALSE, warning = FALSE}
 
@@ -82,39 +129,63 @@ sum(info$nlines)
 
 ## Preparing data
 
-We will extract all data of the files following this procedure but not limiting the number of lines:
+We extract a subset of lines from each file to contruct a data frame for observation purposes.
+Before creating algorithm We will extract all data of the files following this procedure but not limiting the number of lines so we can make the relevant subsets.
+
+Data needs to be cleaned before using it, specially twitter content:
 
 ```{r data, cache = TRUE,warning = FALSE}
-nlines <- 10000
+nlines <- 100000
+regex <- "[^a-zA-Z0-9]"
 twitter_file <-  file("./corpora/final/en_US/en_US.twitter.txt","r")
-twitter_gross <- readLines(twitter_file,nlines)
+twitter_gross <- readLines(twitter_file,nlines, encoding="UTF-8")
+twitter_gross <- tolower(twitter_gross)
+twitter_gross <- replace_contraction(twitter_gross)
+twitter_gross <- replace_symbol(twitter_gross)
+twitter_gross <- replace_abbreviation(twitter_gross)
+twitter_gross <- gsub('\\p{So}|\\p{Cn}', '', twitter_gross, perl = TRUE)
+twitter_gross <- cleanPosts(twitter_gross)
 twitter_df <- data_frame(line=1:nlines, text=twitter_gross)
-cleaned_text <- twitter_df %>% 
-    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
-twitter_words <- cleaned_text %>%
+cleaned_twitter <- twitter_df[complete.cases(twitter_df), ]
+twitter_words <- cleaned_twitter %>%
     unnest_tokens(word, text) %>%
     filter(str_detect(word, "[a-z']$"),
            !word %in% stop_words$word)
+close(twitter_file)
+twitter_words <- subset(twitter_words, grepl("\\d+",word)==FALSE)
+
 
 blogs_file <-  file("./corpora/final/en_US/en_US.blogs.txt","r")
-blogs_gross <- readLines(blogs_file,nlines)
+blogs_gross <- readLines(blogs_file,nlines, encoding="UTF-8")
+blogs_gross <- tolower(blogs_gross)
+blogs_gross <- replace_contraction(blogs_gross)
+blogs_gross <- replace_symbol(blogs_gross)
+blogs_gross <- replace_abbreviation(blogs_gross)
 blogs_df <- data_frame(line=1:nlines, text=blogs_gross)
-cleaned_text <- blogs_df %>% 
-    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
-blogs_words <- cleaned_text %>%
+cleaned_blogs <- blogs_df[complete.cases(blogs_df), ]
+blogs_words <- cleaned_blogs %>%
     unnest_tokens(word, text) %>%
     filter(str_detect(word, "[a-z']$"),
            !word %in% stop_words$word)
+close(blogs_file)
+blogs_words <- subset(blogs_words, grepl("\\d+",word)==FALSE)
+
 
 news_file <-  file("./corpora/final/en_US/en_US.news.txt","r")
-news_gross <- readLines(news_file,nlines)
+news_gross <- readLines(news_file,nlines, encoding="UTF-8")
+news_gross <- tolower(news_gross)
+news_gross <- replace_contraction(news_gross)
+news_gross <- replace_symbol(news_gross)
+news_gross <- replace_abbreviation(news_gross)
 news_df <- data_frame(line=1:nlines, text=news_gross)
-cleaned_text <- news_df %>% 
-    filter(str_detect(text, "^[^>]+[A-Za-z\\d]") | text == "")
-news_words <- cleaned_text %>%
+cleaned_news <- news_df[complete.cases(news_df), ]
+news_words <- cleaned_news %>%
     unnest_tokens(word, text) %>%
     filter(str_detect(word, "[a-z']$"),
            !word %in% stop_words$word)
+close(news_file)
+news_words <- subset(news_words, grepl("\\d+",word)==FALSE)
+
 
 head(news_words)
 
@@ -125,7 +196,7 @@ head(news_words)
 We will combine all three files on a data frame but before continuing let's analyze how different all three sources are, first of all let's see the Tf-idf to find the most relevant terms of each source
 
 
-``` {r combined, cache=TRUE, warnings = FALSE}
+``` {r combined, cache=TRUE, warning = FALSE}
 
 
 combined_words <- bind_rows(mutate(twitter_words, source = "twitter"),
@@ -162,7 +233,7 @@ count_words %>%
 After that, lets see how the frequency of words compare on each source.
 
 
-```{r comparison, cache = TRUE, warnings = FALSE}
+```{r comparison, cache = TRUE, warning = FALSE}
 
 word_frequency <- combined_words %>% 
     count(source, word) %>%
@@ -185,3 +256,149 @@ ggplot(word_frequency, aes(x = proportion, y = `twitter`, color = abs(`twitter` 
 
 ```
 
+Now let's see how data from different sources is correlated
+
+``` {r correlationnews, cache = TRUE, warning = FALSE}
+
+cor.test(data = word_frequency[word_frequency$source == "news",],
+         ~ proportion + `twitter`)
+
+```
+
+``` {r correlationblogs, cache = TRUE, warning = FALSE}
+
+cor.test(data = word_frequency[word_frequency$source == "blogs",],
+         ~ proportion + `twitter`)
+```
+
+We can see how language from blogs and twitter are more similar than they are with news, which is something we intuitively could expect.
+
+## N-Grams
+
+At this point we have a view of how data files are built and we know they are different enough so they can add useful information, now we'll see how do words get together studying n-grams, first we build n-gram data.frames as we built ones with words.
+
+```{r data_ngrams, cache = TRUE,warning = FALSE}
+twitter_bigrams <- cleaned_twitter %>%
+    unnest_tokens(bigram, text, token = "ngrams", n = 2) 
+twitter_bigrams <- twitter_bigrams[complete.cases(twitter_bigrams), ]
+twitter_bigrams <- subset(twitter_bigrams, grepl("\\d+",bigram)==FALSE)
+
+
+news_bigrams <- cleaned_news %>%
+    unnest_tokens(bigram, text, token = "ngrams", n = 2) 
+news_bigrams <- news_bigrams[complete.cases(news_bigrams), ]
+news_bigrams <- subset(news_bigrams, grepl("\\d+",bigram)==FALSE)
+
+
+blogs_bigrams <- cleaned_blogs %>%
+    unnest_tokens(bigram, text, token = "ngrams", n = 2) 
+blogs_bigrams <- blogs_bigrams[complete.cases(blogs_bigrams), ]
+blogs_bigrams <- subset(blogs_bigrams, grepl("\\d+",bigram)==FALSE)
+
+
+head(news_bigrams)
+
+```
+
+Now we can add all the three sources on a single bigram dataframe and check the most frequents
+
+``` {r combined_bigram, cache=TRUE, warning = FALSE}
+
+
+combined_bigrams <- bind_rows(mutate(twitter_bigrams, source = "twitter"),
+                             mutate(blogs_bigrams, source = "blogs"),
+                             mutate(news_bigrams, source = "news"))
+
+combined_bigrams %>%
+  count(bigram, sort = TRUE)
+
+```
+
+At this point we can see most common bigrams are made of stop words, we need to take it into account to estimate next word but this removes a lot useful information from our dataset so let's take a look on how bigrams are formed when there are no stop words on the data set, we will also separate words in bigram so we can filter.
+
+``` {r bigrams_without_sw, cache=TRUE, warning = FALSE}
+
+bigrams_separated <- combined_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+
+```
+
+Now let's take a look to relative importance of bigrams on each source using tf-idf:
+
+```{r bigram_tf_idf, cache=TRUE, warning = FALSE}
+
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+
+bigram_tf_idf <- bigrams_united %>%
+  count(source, bigram) %>%
+  bind_tf_idf(bigram, source, n) %>%
+  arrange(desc(tf_idf))
+
+bigram_tf_idf
+
+```
+
+```{r graph_bigram_tf_idf, cache=TRUE, warning = FALSE}
+
+bigram_tf_idf %>%
+  arrange(desc(tf_idf)) %>%
+  group_by(source) %>%
+  top_n(12, tf_idf) %>%
+  ungroup() %>%
+  mutate(bigram = reorder(bigram, tf_idf)) %>%
+  ggplot(aes(bigram, tf_idf, fill = source)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ source, ncol = 1, scales = "free") +
+  coord_flip() +
+  labs(y = "tf-idf of bigram to source",
+       x = "")
+
+```
+
+As a final step we will see how words correlate between them:
+
+```{r word_corr, cache=TRUE, warning=TRUE}
+
+library(widyr)
+
+word_cors <- combined_words %>%
+  group_by(word) %>%
+  filter(n() >= 500) %>%
+  pairwise_cor(word, source, sort = TRUE)
+
+word_cors
+
+```
+
+``` {r word_corr_graph, cache=FALSE, warning = TRUE}
+
+word_cors %>%
+  filter(correlation > .25) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+```
+
+
+## Final Words
+
+After our exploration we see we can get a good reference combining all three files since they have different styles and are weakly correlated, we need to work harder on tweet cleaning to avoid twitter terminology, but aside of it we can start working on our algorithms after that.
+
+### Bibliography
+
+1. [Text Mining in R](https://www.tidytextmining.com/)
+2. [Today is a good day emoji code](https://github.com/today-is-a-good-day/emojis)
